@@ -106,7 +106,11 @@ class RepoRepository(
 
                 val fetched = LIST_MIRRORS.firstNotNullOfOrNull { fetchCatalog(it, freshness) }
                 if (fetched != null) {
-                    _catalog.value = fetched
+                    // Best-effort English translation of summaries/descriptions. Fail-open: on any
+                    // failure the original text is kept, so a flaky network only means some rows
+                    // stay in their source language.
+                    val translated = RepoTranslate.catalog(fetched.modules)
+                    _catalog.value = fetched.copy(modules = translated)
                     return@withContext
                 }
 
@@ -226,7 +230,7 @@ class RepoRepository(
         }
     }
 
-    private fun fetchDetails(
+    private suspend fun fetchDetails(
         baseUrl: String,
         packageName: String,
         cacheControl: CacheControl,
@@ -235,7 +239,11 @@ class RepoRepository(
         return try {
             client.newCall(request(url, cacheControl)).execute().use { response ->
                 if (!response.isSuccessful) return null
-                gson.fromJson(response.body.string(), OnlineModule::class.java)
+                val parsed =
+                    gson.fromJson(response.body.string(), OnlineModule::class.java) ?: return null
+                // Translate the detail payload too (README, release notes). Fail-open like the
+                // catalogue path: any failure leaves the original strings in place.
+                RepoTranslate.module(parsed, alsoReleases = true)
             }
         } catch (e: Exception) {
             logW("store: $url unavailable", e)
